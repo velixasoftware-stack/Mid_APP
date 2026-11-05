@@ -7,7 +7,11 @@ import SearchSelect from '../../components/SearchSelect';
 import { calculatePlanAmount, BASE_USER_COUNT, BASE_MONTHLY_AMOUNT, EXTRA_USER_AMOUNT } from '../../utils/pricing';
 
 function blankUser() {
-  return { username: '', password: '', name: '', department: '', designation: '', roleNames: ['FRONT_OFFICE'] };
+  return { username: '', password: '', name: '', department: '', designation: '', roleNames: ['FRONT_OFFICE'], locationName: '' };
+}
+
+function blankLocation() {
+  return { name: '', address: '' };
 }
 
 function todayISO() {
@@ -24,6 +28,8 @@ export default function ClientCreate() {
   });
   const [userCount, setUserCount] = useState(1);
   const [userRows, setUserRows] = useState([blankUser()]);
+  // Optional branches; the first one is Main. Left empty = a single-location client.
+  const [locationRows, setLocationRows] = useState([blankLocation()]);
   const [monthlyAmountOverride, setMonthlyAmountOverride] = useState(null); // null = auto-calculated from the plan
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
@@ -55,6 +61,19 @@ export default function ClientCreate() {
   function updateUserRow(index, field, value) {
     setUserRows((rows) => rows.map((row, i) => (i === index ? { ...row, [field]: value } : row)));
   }
+
+  function updateLocationRow(index, field, value) {
+    setLocationRows((rows) => rows.map((row, i) => (i === index ? { ...row, [field]: value } : row)));
+  }
+
+  function removeLocationRow(index) {
+    const removed = locationRows[index].name.trim();
+    setLocationRows((rows) => (rows.length === 1 ? [blankLocation()] : rows.filter((_, i) => i !== index)));
+    // A user held to the removed location goes back to all locations.
+    if (removed) setUserRows((rows) => rows.map((u) => (u.locationName === removed ? { ...u, locationName: '' } : u)));
+  }
+
+  const namedLocations = locationRows.map((l) => l.name.trim()).filter(Boolean);
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -91,9 +110,23 @@ export default function ClientCreate() {
       seen.add(name.toLowerCase());
     }
 
+    const seenLocations = new Set();
+    for (const name of namedLocations) {
+      if (seenLocations.has(name.toLowerCase())) {
+        setError(`Location "${name}" is entered more than once`);
+        return;
+      }
+      seenLocations.add(name.toLowerCase());
+    }
+
     setLoading(true);
     try {
-      const payload = { ...form, users: userRows };
+      const payload = {
+        ...form,
+        locations: locationRows.filter((l) => l.name.trim()),
+        // Location per user only applies with 2+ locations.
+        users: userRows.map((u) => ({ ...u, locationName: namedLocations.length > 1 && namedLocations.includes(u.locationName) ? u.locationName : '' })),
+      };
       if (monthlyAmountOverride != null) payload.monthlyAmount = monthlyAmountOverride;
       const { data } = await api.post('/clients', payload);
       setResult(data);
@@ -109,6 +142,9 @@ export default function ClientCreate() {
       <div className="card">
         <h3>Client "{result.client.clientName}" created (Code: {result.client.clientCode})</h3>
         <p>Subscription: {form.startDate} to {form.endDate} · ₹{result.client.monthlyAmount}/month</p>
+        {result.locations?.length > 0 && (
+          <p>Locations: {result.locations.map((name, i) => (i === 0 ? `${name} (Main)` : name)).join(', ')}</p>
+        )}
         <table>
           <thead><tr><th>Username</th><th>Roles</th></tr></thead>
           <tbody>
@@ -216,6 +252,31 @@ export default function ClientCreate() {
           </p>
         )}
 
+        <h4>Locations</h4>
+        <p style={{ fontSize: 13, color: '#64748b', marginTop: -8 }}>
+          Optional - leave empty for a single-location client. The first location is Main: its prices are the client's
+          own prices, and other locations use them until the client sets their own. With 2 or more locations the
+          client's login asks for a Location, and each user below can be kept to one location.
+        </p>
+        {locationRows.map((l, i) => (
+          <div className="form-grid" key={i} style={{ alignItems: 'end' }}>
+            <label><span>{i === 0 ? 'Main Location Name' : `Location ${i + 1} Name`}</span>
+              <input value={l.name} onChange={(e) => updateLocationRow(i, 'name', e.target.value)} placeholder={i === 0 ? 'e.g. Hyderabad' : 'e.g. Warangal'} />
+            </label>
+            <label><span>Address (optional)</span>
+              <input value={l.address} onChange={(e) => updateLocationRow(i, 'address', e.target.value)} />
+            </label>
+            <div>
+              {(locationRows.length > 1 || l.name || l.address) && (
+                <button type="button" className="secondary" onClick={() => removeLocationRow(i)}>Remove</button>
+              )}
+            </div>
+          </div>
+        ))}
+        <button type="button" className="secondary" style={{ marginBottom: 12 }} onClick={() => setLocationRows((rows) => [...rows, blankLocation()])}>
+          + Add Location
+        </button>
+
         <h4>Users</h4>
         {userRows.map((u, i) => (
           <div className="form-grid" key={i} style={{ borderTop: '1px solid #eee', paddingTop: 10 }}>
@@ -234,6 +295,14 @@ export default function ClientCreate() {
             <label><span>Designation</span>
               <input value={u.designation} onChange={(e) => updateUserRow(i, 'designation', e.target.value)} placeholder="e.g. Lab Technician" />
             </label>
+            {namedLocations.length > 1 && (
+              <label><span>Location</span>
+                <select value={u.locationName} onChange={(e) => updateUserRow(i, 'locationName', e.target.value)}>
+                  <option value="">All locations</option>
+                  {namedLocations.map((name) => <option key={name} value={name}>{name} only</option>)}
+                </select>
+              </label>
+            )}
             <div><span>Roles</span>
               <RoleCheckboxes value={u.roleNames} onChange={(roleNames) => updateUserRow(i, 'roleNames', roleNames)} />
             </div>
