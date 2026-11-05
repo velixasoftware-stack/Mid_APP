@@ -8,9 +8,9 @@ node_modules/
 /playwright/.auth/
 
 # HMS/LIMS app
-app/server/.env
-app/client/dist/
-app/server/uploads/
+Mid-APP/server/.env
+Mid-APP/client/dist/
+Mid-APP/server/uploads/
 database/*.sql
 demo/*.pdf
 
@@ -20,3 +20,8 @@ app-opd/client/dist/
 
 # Local Netlify folder
 .netlify
+
+# Local backups, logs and one-off scripts - never commit (may hold credentials)
+*.bak
+*.log
+Mid-APP/server/_tmp_*.js

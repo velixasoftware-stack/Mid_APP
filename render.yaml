@@ -1,10 +1,10 @@
 services:
   - type: web
-    name: hms-lims
+    name: mid-app
     runtime: node
     plan: free
-    buildCommand: npm install --prefix app/client && npm run build --prefix app/client && npm install --prefix app/server
-    startCommand: npm start --prefix app/server
+    buildCommand: npm install --prefix Mid-APP/client && npm run build --prefix Mid-APP/client && npm install --prefix Mid-APP/server
+    startCommand: npm start --prefix Mid-APP/server
     envVars:
       - key: NODE_ENV
         value: production
