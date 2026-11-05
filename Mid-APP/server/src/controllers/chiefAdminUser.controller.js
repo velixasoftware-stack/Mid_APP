@@ -1,6 +1,6 @@
 const bcrypt = require('bcryptjs');
 const { ChiefAdmin, Role, sequelize } = require('../models');
-const { ALL_CHIEF_ADMIN_ROLES } = require('../utils/roles');
+const { ALL_ROLES, ALL_CHIEF_ADMIN_ROLES, CHIEF_ADMIN_ROLES } = require('../utils/roles');
 
 async function resolveRoles(roleNames) {
   const invalid = roleNames.filter((name) => !ALL_CHIEF_ADMIN_ROLES.includes(name));
@@ -126,6 +126,30 @@ async function resetPassword(req, res) {
   return res.json({ id: admin.id, username: admin.username });
 }
 
+/**
+ * Run at every boot: makes sure the roles exist and, on a brand-new database
+ * (no Chief Admin at all), creates the first one from CHIEF_ADMIN_USERNAME /
+ * CHIEF_ADMIN_PASSWORD - so a fresh deployment can be logged into without
+ * running seed.js (which also adds demo data). Never touches existing admins.
+ */
+async function ensureFirstChiefAdmin() {
+  for (const name of new Set([...ALL_ROLES, ...ALL_CHIEF_ADMIN_ROLES])) {
+    await Role.findOrCreate({ where: { name } });
+  }
+  if (await ChiefAdmin.count() > 0) return;
+  const username = (process.env.CHIEF_ADMIN_USERNAME || 'chiefadmin').trim();
+  const password = process.env.CHIEF_ADMIN_PASSWORD;
+  if (!password) {
+    console.warn('No Chief Admin exists and CHIEF_ADMIN_PASSWORD is not set - set it to create the first login.');
+    return;
+  }
+  const adminRole = await Role.findOne({ where: { name: CHIEF_ADMIN_ROLES.ADMIN } });
+  const admin = await ChiefAdmin.create({ username, passwordHash: await bcrypt.hash(password, 10), name: 'Chief Admin' });
+  await admin.setRoles([adminRole]);
+  console.log(`First Chief Admin "${username}" created from CHIEF_ADMIN_PASSWORD.`);
+}
+
 module.exports = {
+  ensureFirstChiefAdmin,
   createChiefAdminUser, createChiefAdminUsersBulk, listChiefAdminUsers, updateChiefAdminUser, resetPassword,
 };

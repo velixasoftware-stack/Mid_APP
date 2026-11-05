@@ -10,6 +10,7 @@ const routes = require('./routes');
 const { expireOverdueSubscriptions } = require('./controllers/subscription.controller');
 const { backfillSystemUsers } = require('./controllers/client.controller');
 const { seedDefaultPatientTitles } = require('./controllers/patientTitle.controller');
+const { ensureFirstChiefAdmin } = require('./controllers/chiefAdminUser.controller');
 const { dropStaleDiskCopy, serveStoredFile, backfillStoredFiles } = require('./utils/fileStore');
 
 const app = express();
@@ -143,6 +144,7 @@ async function start() {
     'UPDATE bill b SET "locationId" = l.id FROM client_location l WHERE l."clientId" = b."clientId" AND l."isMain" AND b."locationId" IS NULL',
     'UPDATE sample s SET "locationId" = l.id FROM client_location l WHERE l."clientId" = s."clientId" AND l."isMain" AND s."locationId" IS NULL',
   ].join(';\n'));
+  await ensureFirstChiefAdmin();
   await seedDefaultPatientTitles();
   await backfillStoredFiles();
   await sequelize.query("ALTER TYPE enum_report_status ADD VALUE IF NOT EXISTS 'REVOKED'");
