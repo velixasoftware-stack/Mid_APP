@@ -4,7 +4,7 @@ services:
     runtime: node
     region: singapore # closest Render region to the Mumbai (ap-south-1) database
     plan: free
-    buildCommand: npm install --prefix Mid-APP/client && npm run build --prefix Mid-APP/client && npm install --prefix Mid-APP/server
+    buildCommand: npm install --include=dev --prefix Mid-APP/client && npm run build --prefix Mid-APP/client && npm install --prefix Mid-APP/server
     startCommand: npm start --prefix Mid-APP/server
     envVars:
       - key: NODE_ENV
