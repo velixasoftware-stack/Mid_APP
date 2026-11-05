@@ -1,7 +1,7 @@
 const { Op } = require('sequelize');
 const XLSX = require('xlsx');
 const {
-  Bill, BillItem, TestMaster, Sample, Report, Patient, Refund, BillDiscount, DuePayment, Result, ClientUser,
+  Bill, BillItem, TestMaster, Sample, Report, Patient, Refund, BillDiscount, DuePayment, Result, ClientUser, ClientLocation,
 } = require('../models');
 const { locationWhere } = require('../utils/location');
 
@@ -61,9 +61,63 @@ function dateRangeWhere(from, to) {
   return { createdAt: range };
 }
 
-/** The date range plus, for a single-location user, their location. */
+/**
+ * Which location's data a report covers. MANAGER and ADMIN (which includes
+ * Chief Admin's support login) see every location, or the one picked in the
+ * Location filter (?locationId=); anyone else only their own location.
+ */
+function reportLocationWhere(req) {
+  const roles = req.user.roles || [];
+  if (roles.includes('MANAGER') || roles.includes('ADMIN')) {
+    const picked = Number.parseInt(req.query.locationId, 10);
+    return Number.isInteger(picked) && picked > 0 ? { locationId: picked } : {};
+  }
+  return locationWhere(req);
+}
+
+/** The date range plus the location the report covers. */
 function rangeFor(req, from, to) {
-  return { ...dateRangeWhere(from, to), ...locationWhere(req) };
+  return { ...dateRangeWhere(from, to), ...reportLocationWhere(req) };
+}
+
+/**
+ * Bill totals per location for the period - one row per location (zeros
+ * included), in the client's location order (Main first).
+ */
+async function buildLocationWise(req, range) {
+  const { clientId } = req.user;
+  const [bills, locations] = await Promise.all([
+    Bill.findAll({ where: { clientId, ...range }, include: [Refund, BillDiscount] }),
+    ClientLocation.findAll({ where: { clientId }, order: [['isMain', 'DESC'], ['name', 'ASC']] }),
+  ]);
+  const shown = range.locationId ? locations.filter((l) => l.id === range.locationId) : locations;
+  const rows = new Map(shown.map((l) => [l.id, {
+    locationId: l.id, location: l.name, isMain: l.isMain, bills: 0, gross: 0, discount: 0, tax: 0, net: 0, collected: 0, refunded: 0, outstanding: 0,
+  }]));
+  for (const b of bills) {
+    if (!rows.has(b.locationId)) {
+      rows.set(b.locationId, {
+        locationId: b.locationId, location: 'No location', isMain: false, bills: 0, gross: 0, discount: 0, tax: 0, net: 0, collected: 0, refunded: 0, outstanding: 0,
+      });
+    }
+    const r = rows.get(b.locationId);
+    r.bills += 1;
+    r.gross += Number(b.totalAmount);
+    r.discount += Number(b.discount);
+    r.tax += Number(b.taxAmount);
+    r.net += Number(b.totalAmount) - Number(b.discount) + Number(b.taxAmount);
+    r.collected += Number(b.paidAmount);
+    r.refunded += refundedTotal(b);
+    r.outstanding += dueTotal(b);
+  }
+  const round = (n) => Math.round(n * 100) / 100;
+  return [...rows.values()].map((r) => Object.fromEntries(Object.entries(r).map(([k, v]) => [k, typeof v === 'number' && k !== 'locationId' && k !== 'bills' ? round(v) : v])));
+}
+
+// GET /api/reports/location-wise?from=&to=&locationId=
+async function locationWise(req, res) {
+  const { from, to } = req.query;
+  return res.json(await buildLocationWise(req, rangeFor(req, from, to)));
 }
 
 // GET /api/reports/transactions?from=&to=&groupBy=day|month
@@ -401,6 +455,10 @@ async function exportReport(req, res) {
   })));
 
   const { byMode, byUser } = await buildPaymentBreakdown(clientId, range);
+  const locationRows = (await buildLocationWise(req, range)).map((r) => ({
+    Location: r.location + (r.isMain ? ' (Main)' : ''), Bills: r.bills, Gross: r.gross, Discount: r.discount, GST: r.tax,
+    Net: r.net, Collected: r.collected, Refunded: r.refunded, Outstanding: r.outstanding,
+  }));
   const modeRows = byMode.map((m) => ({
     'Payment Mode': m.mode, Payments: m.payments, Collected: m.collected, 'Refunded / Paid Back': m.refunded, Net: m.net,
   }));
@@ -413,6 +471,7 @@ async function exportReport(req, res) {
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(summaryRows), 'Summary');
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(modeRows.length ? modeRows : [{ 'Payment Mode': 'No payments' }]), 'Payment Mode-wise');
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(userRows.length ? userRows : [{ User: 'No bills' }]), 'User-wise');
+  if (locationRows.length) XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(locationRows), 'Location-wise');
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(transactionRows), 'Transactions');
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(testRevenueRows), 'Test-wise Revenue');
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(outstandingRows), 'Outstanding');
@@ -427,5 +486,5 @@ async function exportReport(req, res) {
 
 module.exports = {
   transactions, collectionSummary, outstanding, labSummary, labDetails, testWiseRevenue, reportStatusCounts, exportReport,
-  paymentBreakdown,
+  paymentBreakdown, locationWise,
 };

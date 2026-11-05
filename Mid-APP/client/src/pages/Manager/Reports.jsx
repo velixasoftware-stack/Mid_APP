@@ -106,8 +106,17 @@ export default function Reports() {
   const [transactions, setTransactions] = useState([]);
   const [groupBy, setGroupBy] = useState('day');
   const [labDetails, setLabDetails] = useState([]);
+  // Several locations: a Location filter, and bill totals per location.
+  const [locations, setLocations] = useState([]);
+  const [locationId, setLocationId] = useState(''); // '' = all locations
+  const [locationWise, setLocationWise] = useState([]);
+  const multiLocation = locations.length > 1;
 
-  const dateParams = { from: fromDate || undefined, to: toDate || undefined };
+  useEffect(() => {
+    api.get('/locations').then(({ data }) => setLocations(data.locations)).catch(() => {});
+  }, []);
+
+  const dateParams = { from: fromDate || undefined, to: toDate || undefined, locationId: locationId || undefined };
 
   useEffect(() => {
     api.get('/reports/collection-summary', { params: dateParams }).then((r) => setCollection(r.data));
@@ -117,13 +126,14 @@ export default function Reports() {
     api.get('/reports/report-status', { params: dateParams }).then((r) => setReportStatus(r.data));
     api.get('/reports/lab-details', { params: dateParams }).then((r) => setLabDetails(r.data));
     api.get('/reports/payment-breakdown', { params: dateParams }).then((r) => setBreakdown(r.data));
+    api.get('/reports/location-wise', { params: dateParams }).then((r) => setLocationWise(r.data)).catch(() => setLocationWise([]));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fromDate, toDate]);
+  }, [fromDate, toDate, locationId]);
 
   useEffect(() => {
     api.get('/reports/transactions', { params: { ...dateParams, groupBy } }).then((r) => setTransactions(r.data));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fromDate, toDate, groupBy]);
+  }, [fromDate, toDate, groupBy, locationId]);
 
   function exportUrl() {
     // URLSearchParams stringifies `undefined` as the literal text "undefined"
@@ -149,10 +159,21 @@ export default function Reports() {
           <span className="dash-bar-icon"><Icon name="reports" size={16} /></span>
           <div>
             <strong>Reports Dashboard</strong>
-            <span>{fromDate || toDate ? `${fromDate || '…'} → ${toDate || 'today'}` : 'All dates'}</span>
+            <span>
+              {fromDate || toDate ? `${fromDate || '…'} → ${toDate || 'today'}` : 'All dates'}
+              {multiLocation && ` · ${locations.find((l) => String(l.id) === locationId)?.name || 'All locations'}`}
+            </span>
           </div>
         </div>
         <div className="dash-bar-controls">
+          {multiLocation && (
+            <div className="df-field"><span>Location</span>
+              <select value={locationId} onChange={(e) => setLocationId(e.target.value)}>
+                <option value="">All locations</option>
+                {locations.map((l) => <option key={l.id} value={l.id}>{l.name}{l.isMain ? ' (Main)' : ''}</option>)}
+              </select>
+            </div>
+          )}
           <div className="df-field"><span>From</span>
             <input type="date" value={fromDate} max={toDate || undefined} onChange={(e) => setFromDate(e.target.value)} />
           </div>
@@ -198,6 +219,44 @@ export default function Reports() {
           hint={outstandingAmt > 0 ? 'To be collected' : 'All settled'}
         />
       </div>
+
+      {multiLocation && (
+        <div className="card">
+          <h3>Location-wise Transactions</h3>
+          <table>
+            <thead>
+              <tr><th>Location</th><th>Bills</th><th>Gross</th><th>Discount</th><th>Net</th><th>Collected</th><th>Refunded</th><th>Outstanding</th></tr>
+            </thead>
+            <tbody>
+              {locationWise.map((l) => (
+                <tr key={l.locationId ?? 'none'}>
+                  <td>
+                    {locationId ? l.location : (
+                      <button type="button" className="link-btn" title="Show only this location" onClick={() => l.locationId && setLocationId(String(l.locationId))}>
+                        {l.location}
+                      </button>
+                    )}
+                    {l.isMain && <span className="cell-sub"> (Main)</span>}
+                  </td>
+                  <td>{l.bills}</td><td>{inr(l.gross)}</td><td>{inr(l.discount)}</td>
+                  <td><strong>{inr(l.net)}</strong></td><td>{inr(l.collected)}</td><td>{inr(l.refunded)}</td><td>{inr(l.outstanding)}</td>
+                </tr>
+              ))}
+              {locationWise.length === 0 && <tr><td colSpan={8}>No bills in this period.</td></tr>}
+            </tbody>
+            {locationWise.length > 1 && (
+              <tfoot>
+                <tr>
+                  <th>Total</th><th>{locationWise.reduce((s, l) => s + l.bills, 0)}</th>
+                  {['gross', 'discount', 'net', 'collected', 'refunded', 'outstanding'].map((k) => (
+                    <th key={k}>{inr(locationWise.reduce((s, l) => s + l[k], 0))}</th>
+                  ))}
+                </tr>
+              </tfoot>
+            )}
+          </table>
+        </div>
+      )}
 
       <div className="report-split">
         <div className="card">

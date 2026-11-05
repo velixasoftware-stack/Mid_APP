@@ -1760,3 +1760,5 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: #60a5fa
 @media print {
   .public-report { padding: 0; max-width: none; margin: 0; }
 }
+.link-btn { background: none; border: 0; padding: 0; color: #2563eb; font: inherit; font-weight: 600; cursor: pointer; text-align: left; }
+.link-btn:hover { text-decoration: underline; }
