@@ -2,7 +2,7 @@ const { Op } = require('sequelize');
 const XLSX = require('xlsx');
 const {
   sequelize, TestGroup, TestMaster, ParameterMaster, ParameterNormalRange, BillItem, Result,
-  ClientTestPrice, ClientTestShortName, ClientTestSpecimen, PayorTestPrice, ClientParameterTrend, ClientHiddenParameter,
+  ClientTestPrice, ClientTestShortName, ClientTestSpecimen, PayorTestPrice, ClientParameterTrend, ClientHiddenParameter, ClientParameterLabel,
 } = require('../models');
 const { hiddenKey, hiddenParameterKeys } = require('../utils/hiddenParameters');
 const { sortParameters } = require('../utils/parameterOrder');
@@ -640,6 +640,73 @@ async function restoreHiddenParameter(req, res) {
   return res.json({ message: 'Parameter restored to this test' });
 }
 
+// PUT /api/{admin/masters|masters|test-config}/parameters/:parameterId
+// Body: { parameterName?, unit?, method?, description? }  (description: own/universal-by-Chief-Admin only)
+// - Chief Admin: edits a universal parameter for everyone.
+// - A clinic, its own parameter: edits it directly.
+// - A clinic, a universal parameter: saves its own name/unit/method
+//   (ClientParameterLabel) - only that clinic's screens and reports change.
+//   A value equal to Chief Admin's (or blank) means "use Chief Admin's";
+//   { reset: true } drops the clinic's version entirely.
+async function updateParameterDetails(req, res) {
+  const parameter = await ParameterMaster.findByPk(req.params.parameterId);
+  if (!parameter) return res.status(404).json({ message: 'Parameter not found' });
+  const clientId = requesterClientId(req);
+  const by = req.user?.username || (clientId ? `client ${clientId}` : 'chief admin');
+  const clean = (v) => (v === undefined ? undefined : (v === null ? '' : String(v).trim()));
+  const name = clean(req.body.parameterName);
+  const unit = clean(req.body.unit);
+  const method = clean(req.body.method);
+  const description = clean(req.body.description);
+
+  // A clinic changing a universal parameter: its own version only.
+  if (clientId && parameter.clientId == null) {
+    const where = { clientId, parameterId: parameter.id };
+    if (req.body.reset) {
+      await ClientParameterLabel.destroy({ where });
+      return res.json({ message: "Using Chief Admin's name, unit and method again", scope: 'client' });
+    }
+    // Blank or the same as Chief Admin's = follow Chief Admin's.
+    const own = (v, master) => (v === undefined ? undefined : (v === '' || v === (master || '') ? null : v));
+    const values = {
+      parameterName: own(name, parameter.parameterName),
+      unit: own(unit, parameter.unit),
+      method: own(method, parameter.method),
+    };
+    const existing = await ClientParameterLabel.findOne({ where });
+    const next = {
+      parameterName: values.parameterName !== undefined ? values.parameterName : existing?.parameterName ?? null,
+      unit: values.unit !== undefined ? values.unit : existing?.unit ?? null,
+      method: values.method !== undefined ? values.method : existing?.method ?? null,
+    };
+    if (next.parameterName == null && next.unit == null && next.method == null) {
+      if (existing) await existing.destroy();
+    } else if (existing) {
+      await existing.update({ ...next, updatedBy: by });
+    } else {
+      await ClientParameterLabel.create({ ...where, ...next, createdBy: by });
+    }
+    console.log(`Client ${clientId} set its own label for universal parameter ${parameter.id}: ${JSON.stringify(next)} - ${by}`);
+    return res.json({ message: 'Saved for your lab only', scope: 'client', label: next });
+  }
+
+  if (clientId && parameter.clientId !== clientId) {
+    return res.status(403).json({ message: 'This parameter belongs to another client' });
+  }
+  if (name !== undefined && !name) return res.status(400).json({ message: 'Parameter name is required' });
+
+  const before = { parameterName: parameter.parameterName, unit: parameter.unit, method: parameter.method };
+  await parameter.update({
+    ...(name !== undefined && { parameterName: name }),
+    ...(unit !== undefined && { unit: unit || null }),
+    ...(method !== undefined && { method: method || null }),
+    ...(description !== undefined && { description: description || null }),
+    updatedBy: by,
+  });
+  console.log(`Parameter ${parameter.id} edited by ${by}: ${JSON.stringify(before)} -> ${JSON.stringify({ parameterName: parameter.parameterName, unit: parameter.unit, method: parameter.method })}`);
+  return res.json({ message: clientId ? 'Parameter updated' : 'Parameter updated for all clients', scope: clientId ? 'own' : 'universal', parameter });
+}
+
 // POST /api/masters/parameters/:parameterId/ranges  - add one age/gender-specific
 // normal range rule to an existing parameter.
 async function addNormalRange(req, res) {
@@ -1195,6 +1262,6 @@ async function commitUpload(req, res) {
 }
 
 module.exports = {
-  createTest, listTests, updateTest, setClientSpecimen, testUsage, deleteTest, bulkTestAction, addParameter, assignParameter, addNormalRange, deleteNormalRange, updateNormalRange, reorderParameters, setParameterSequence, removeParameter, restoreHiddenParameter,
+  createTest, listTests, updateTest, setClientSpecimen, testUsage, deleteTest, bulkTestAction, addParameter, assignParameter, addNormalRange, deleteNormalRange, updateNormalRange, reorderParameters, setParameterSequence, removeParameter, restoreHiddenParameter, updateParameterDetails,
   downloadTemplate, previewUpload, commitUpload, listTestGroups, createTestGroup, setParameterTrend, setNormalRangeText, resetParameterRanges,
 };

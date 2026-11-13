@@ -119,6 +119,7 @@ const AREAS = [
       'Own parameters': 'SELECT count(*) FROM parameter_master WHERE "clientId" = :c',
       'Trend settings': 'SELECT count(*) FROM client_parameter_trend WHERE "clientId" = :c',
       'Removed universal parameters': 'SELECT count(*) FROM client_hidden_parameter WHERE "clientId" = :c',
+      'Own names/units': 'SELECT count(*) FROM client_parameter_label WHERE "clientId" = :c',
     },
     exports: {
       client_parameter_override: 'SELECT * FROM client_parameter_override WHERE "clientId" = :c',
@@ -126,11 +127,13 @@ const AREAS = [
       parameter_master: 'SELECT * FROM parameter_master WHERE "clientId" = :c',
       client_parameter_trend: 'SELECT * FROM client_parameter_trend WHERE "clientId" = :c',
       client_hidden_parameter: 'SELECT * FROM client_hidden_parameter WHERE "clientId" = :c',
+      client_parameter_label: 'SELECT * FROM client_parameter_label WHERE "clientId" = :c',
     },
     deletes: [
       'DELETE FROM client_parameter_override WHERE "clientId" = :c',
       'DELETE FROM client_parameter_trend WHERE "clientId" = :c',
       'DELETE FROM client_hidden_parameter WHERE "clientId" = :c',
+      'DELETE FROM client_parameter_label WHERE "clientId" = :c',
       'DELETE FROM parameter_normal_range WHERE "clientId" = :c',
       'DELETE FROM parameter_master WHERE "clientId" = :c', // + their own range rows and test links
     ],

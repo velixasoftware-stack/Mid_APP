@@ -431,6 +431,21 @@ const ClientParameterTrend = sequelize.define('ClientParameterTrend', {
   indexes: [{ unique: true, fields: ['clientId', 'parameterId'] }],
 });
 
+// A clinic's own name / unit / method for a universal (Chief Admin) parameter,
+// shown on its result entry and reports only. Null field = Chief Admin's
+// value. Kept apart from ClientParameterOverride (ranges) so changing a unit
+// doesn't stop the clinic following Chief Admin's later range updates.
+const ClientParameterLabel = sequelize.define('ClientParameterLabel', {
+  id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
+  parameterName: { type: DataTypes.STRING },
+  unit: { type: DataTypes.STRING },
+  method: { type: DataTypes.STRING },
+  ...AUDIT_FIELDS,
+}, {
+  tableName: 'client_parameter_label',
+  indexes: [{ unique: true, fields: ['clientId', 'parameterId'] }],
+});
+
 // A universal (Chief Admin) parameter a clinic has removed from one test for
 // itself only: hidden from that clinic's Test Parameters list and result
 // entry for that test, while every other clinic (and Chief Admin's master)
@@ -818,7 +833,12 @@ ClientParameterTrend.belongsTo(Client, { foreignKey: 'clientId' });
 ParameterMaster.hasMany(ClientParameterTrend, { foreignKey: { name: 'parameterId', allowNull: false }, onDelete: 'CASCADE' });
 ClientParameterTrend.belongsTo(ParameterMaster, { foreignKey: 'parameterId' });
 
-Client.hasMany(ClientHiddenParameter, { foreignKey: { name: 'clientId', allowNull: false }, onDelete: 'CASCADE' });
+Client.hasMany(ClientParameterLabel, { foreignKey: { name: 'clientId', allowNull: false }, onDelete: 'CASCADE' });
+ClientParameterLabel.belongsTo(Client, { foreignKey: 'clientId' });
+ParameterMaster.hasMany(ClientParameterLabel, { foreignKey: { name: 'parameterId', allowNull: false }, onDelete: 'CASCADE' });
+ClientParameterLabel.belongsTo(ParameterMaster, { foreignKey: 'parameterId' });
+
+Client.hasMany(ClientHiddenParameter,{ foreignKey: { name: 'clientId', allowNull: false }, onDelete: 'CASCADE' });
 ClientHiddenParameter.belongsTo(Client, { foreignKey: 'clientId' });
 TestMaster.hasMany(ClientHiddenParameter, { foreignKey: { name: 'testId', allowNull: false }, onDelete: 'CASCADE' });
 ClientHiddenParameter.belongsTo(TestMaster, { foreignKey: 'testId' });
@@ -1014,6 +1034,7 @@ module.exports = {
   ClientTestSpecimen,
   ClientParameterTrend,
   ClientHiddenParameter,
+  ClientParameterLabel,
   ClientTestPrice,
   Package,
   Patient,

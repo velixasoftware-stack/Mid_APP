@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import api from '../../api/client';
 import ParamOrder from '../../components/ParamOrder';
+import ParameterDetailsEditor from '../../components/ParameterDetailsEditor';
 import { Icon } from '../../components/Icons';
 import StatusSwitch from '../../components/StatusSwitch';
 import {
@@ -544,7 +545,7 @@ This cannot be undone.`)) return;
                       <td><RangeMatrix param={p} /></td>
                       <td>
                         <div className="order-actions">
-                          <button type="button" className="secondary icon-btn" title="Manage ranges" onClick={() => openManageRanges(p)}>
+                          <button type="button" className="secondary icon-btn" title="Edit parameter (name, unit, method, normal ranges)" onClick={() => openManageRanges(p)}>
                             <Icon name="edit" size={15} />
                           </button>
                           {true && (
@@ -779,7 +780,18 @@ This cannot be undone.`)) return;
       {manageParam && (
         <div className="modal-overlay" onClick={() => setManageParam(null)}>
           <div className="modal-card" style={{ width: 800, maxWidth: 'calc(100vw - 32px)', textAlign: 'left' }} onClick={(e) => e.stopPropagation()}>
-            <h2>Normal Ranges — {manageParam.parameterName}</h2>
+            <h2>Edit Parameter — {manageParam.parameterName}</h2>
+            <ParameterDetailsEditor
+              apiBase="/admin/masters"
+              param={manageParam}
+              isClient={false}
+              onSaved={async () => {
+                const data = await load();
+                const freshTest = data.tests.find((t) => t.id === selectedTestId);
+                setManageParam((prev) => freshTest?.ParameterMasters?.find((p) => p.id === prev.id) || prev);
+              }}
+            />
+            <h4 style={{ margin: '0 0 4px' }}>Normal Ranges</h4>
             <p style={{ fontSize: 13, color: '#64748b' }}>
               Default range: {manageParam.normalRangeLow || '—'} - {manageParam.normalRangeHigh || '—'} (used when no rule below matches).
             </p>

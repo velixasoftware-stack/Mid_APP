@@ -9,9 +9,10 @@
 // never customised keeps following Chief Admin's ranges automatically.
 // "Reset" (resetClientRanges) drops the copy and goes back to Chief Admin's.
 const { Op } = require('sequelize');
-const { ParameterNormalRange, ClientParameterOverride } = require('../models');
+const { ParameterNormalRange, ClientParameterOverride, ClientParameterLabel } = require('../models');
 
 const TEXT_KEYS = ['normalRangeText', 'normalRangeTextMale', 'normalRangeTextFemale'];
+const LABEL_KEYS = ['parameterName', 'unit', 'method'];
 const plain = (r) => (r.toJSON ? r.toJSON() : r);
 
 /**
@@ -32,8 +33,20 @@ async function applyClientRanges(params, clientId, options = {}) {
     ? await ClientParameterOverride.findAll({ where: { clientId, parameterId: ids }, transaction: options.transaction })
     : [];
   const overrideByParam = new Map(overrides.map((o) => [o.parameterId, o]));
+  // This clinic's own name / unit / method for universal parameters.
+  const labels = clientId
+    ? await ClientParameterLabel.findAll({ where: { clientId, parameterId: ids }, transaction: options.transaction })
+    : [];
+  const labelByParam = new Map(labels.map((l) => [l.parameterId, l]));
 
   for (const p of list) {
+    const label = p.clientId == null ? labelByParam.get(p.id) : null;
+    if (label) {
+      // Chief Admin's values kept alongside, so the screen can offer "use Chief Admin's".
+      p.masterLabel = { parameterName: p.parameterName, unit: p.unit, method: p.method };
+      for (const k of LABEL_KEYS) if (label[k] != null) p[k] = label[k];
+    }
+    p.labelCustomizedForClient = !!label;
     const rows = ranges.filter((r) => r.parameterId === p.id);
     // Only a universal parameter can be customised; a clinic's own parameter
     // simply has its own (clientId null) rows.
