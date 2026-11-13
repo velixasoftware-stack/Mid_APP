@@ -111,23 +111,26 @@ const AREAS = [
   {
     key: 'ranges',
     label: 'Own Normal Ranges & Parameters',
-    description: "The client's own copies of Chief Admin normal ranges, its trend settings, and parameters it created itself.",
+    description: "The client's own copies of Chief Admin normal ranges, its trend settings, parameters it created itself, and universal parameters it removed from tests for itself.",
     needsBills: true,
     counts: {
       'Customised parameters': 'SELECT count(*) FROM client_parameter_override WHERE "clientId" = :c',
       'Own range rows': 'SELECT count(*) FROM parameter_normal_range WHERE "clientId" = :c',
       'Own parameters': 'SELECT count(*) FROM parameter_master WHERE "clientId" = :c',
       'Trend settings': 'SELECT count(*) FROM client_parameter_trend WHERE "clientId" = :c',
+      'Removed universal parameters': 'SELECT count(*) FROM client_hidden_parameter WHERE "clientId" = :c',
     },
     exports: {
       client_parameter_override: 'SELECT * FROM client_parameter_override WHERE "clientId" = :c',
       parameter_normal_range: 'SELECT * FROM parameter_normal_range WHERE "clientId" = :c OR "parameterId" IN (SELECT id FROM parameter_master WHERE "clientId" = :c)',
       parameter_master: 'SELECT * FROM parameter_master WHERE "clientId" = :c',
       client_parameter_trend: 'SELECT * FROM client_parameter_trend WHERE "clientId" = :c',
+      client_hidden_parameter: 'SELECT * FROM client_hidden_parameter WHERE "clientId" = :c',
     },
     deletes: [
       'DELETE FROM client_parameter_override WHERE "clientId" = :c',
       'DELETE FROM client_parameter_trend WHERE "clientId" = :c',
+      'DELETE FROM client_hidden_parameter WHERE "clientId" = :c',
       'DELETE FROM parameter_normal_range WHERE "clientId" = :c',
       'DELETE FROM parameter_master WHERE "clientId" = :c', // + their own range rows and test links
     ],
@@ -135,16 +138,99 @@ const AREAS = [
 ];
 const AREA_BY_KEY = new Map(AREAS.map((a) => [a.key, a]));
 
+// ---- Date range (From Date - To Date) -------------------------------------
+// With a range, only Bills & Lab Work can be cleared, and only the bills
+// created in that range (bill date in IST, the same date Reports use) plus
+// their own billed tests, samples, results and reports. Masters (patients,
+// prices, payors, ...) are not dated transactions, so they are left alone.
+// A payor invoice holding any in-range bill is removed too (it can't stay
+// with bills missing); its other bills simply go back to "not invoiced".
+const RANGE_BILLS = 'SELECT id FROM bill WHERE "clientId" = :c AND "createdAt" >= :from AND "createdAt" < :to';
+const RANGE_BILL_ITEMS = `SELECT id FROM bill_item WHERE "billId" IN (${RANGE_BILLS})`;
+const RANGE_SAMPLES = `SELECT id FROM sample WHERE "clientId" = :c AND ("billItemId" IN (${RANGE_BILL_ITEMS}) OR ("billItemId" IS NULL AND "createdAt" >= :from AND "createdAt" < :to))`;
+const RANGE_INVOICES = `SELECT id FROM payor_invoice WHERE "clientId" = :c AND id IN (SELECT "payorInvoiceId" FROM payor_invoice_item WHERE "billId" IN (${RANGE_BILLS}))`;
+
+const RANGED_BILLS_AREA = {
+  ...AREA_BY_KEY.get('bills'),
+  counts: {
+    Bills: `SELECT count(*) FROM bill WHERE id IN (${RANGE_BILLS})`,
+    'Billed tests': `SELECT count(*) FROM bill_item WHERE id IN (${RANGE_BILL_ITEMS})`,
+    Samples: `SELECT count(*) FROM sample WHERE id IN (${RANGE_SAMPLES})`,
+    Results: `SELECT count(*) FROM result WHERE "sampleId" IN (${RANGE_SAMPLES})`,
+    Reports: `SELECT count(*) FROM report WHERE "sampleId" IN (${RANGE_SAMPLES})`,
+    'Payor invoices': `SELECT count(*) FROM payor_invoice WHERE id IN (${RANGE_INVOICES})`,
+  },
+  exports: {
+    bill: `SELECT * FROM bill WHERE id IN (${RANGE_BILLS})`,
+    bill_item: `SELECT * FROM bill_item WHERE id IN (${RANGE_BILL_ITEMS})`,
+    bill_discount: `SELECT * FROM bill_discount WHERE "billId" IN (${RANGE_BILLS})`,
+    due_payment: `SELECT * FROM due_payment WHERE "billId" IN (${RANGE_BILLS})`,
+    refund: `SELECT * FROM refund WHERE "billId" IN (${RANGE_BILLS})`,
+    sample: `SELECT * FROM sample WHERE id IN (${RANGE_SAMPLES})`,
+    result: `SELECT * FROM result WHERE "sampleId" IN (${RANGE_SAMPLES})`,
+    report: `SELECT * FROM report WHERE "sampleId" IN (${RANGE_SAMPLES})`,
+    payor_invoice: `SELECT * FROM payor_invoice WHERE id IN (${RANGE_INVOICES})`,
+    payor_invoice_item: `SELECT * FROM payor_invoice_item WHERE "payorInvoiceId" IN (${RANGE_INVOICES})`,
+    payor_invoice_collection: `SELECT * FROM payor_invoice_collection WHERE "payorInvoiceId" IN (${RANGE_INVOICES})`,
+  },
+  // Same order as the full reset: invoices, then samples, then the bills.
+  deletes: [
+    `DELETE FROM payor_invoice WHERE id IN (${RANGE_INVOICES})`,
+    `DELETE FROM sample WHERE id IN (${RANGE_SAMPLES})`,
+    `DELETE FROM bill WHERE id IN (${RANGE_BILLS})`,
+  ],
+};
+
+/** Bills outside the range that sit on a payor invoice the range would remove. */
+const OUTSIDE_BILLS_ON_INVOICES = `SELECT count(DISTINCT "billId") FROM payor_invoice_item
+  WHERE "payorInvoiceId" IN (${RANGE_INVOICES}) AND "billId" NOT IN (${RANGE_BILLS})`;
+
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * { fromDate, toDate } ('YYYY-MM-DD', both inclusive) -> the query range in
+ * IST: from 00:00 on fromDate up to (not including) 00:00 the day after toDate.
+ * Neither given -> no range (the whole client, as before).
+ */
+function parseRange(fromDate, toDate) {
+  const f = String(fromDate || '').trim();
+  const t = String(toDate || '').trim();
+  if (!f && !t) return {};
+  if (!f || !t) return { error: 'Select both From Date and To Date' };
+  if (!DATE_RE.test(f) || !DATE_RE.test(t)) return { error: 'Dates must be YYYY-MM-DD' };
+  if (f > t) return { error: 'From Date cannot be after To Date' };
+  const from = new Date(`${f}T00:00:00+05:30`);
+  const to = new Date(new Date(`${t}T00:00:00+05:30`).getTime() + 24 * 60 * 60 * 1000);
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) return { error: 'Invalid date' };
+  return { range: { from, to, fromDate: f, toDate: t } };
+}
+
+function areaFor(key, range) {
+  return range && key === 'bills' ? RANGED_BILLS_AREA : AREA_BY_KEY.get(key);
+}
+
+function replacementsFor(clientId, range) {
+  return range ? { c: clientId, from: range.from, to: range.to } : { c: clientId };
+}
+
+/** With a date range only Bills & Lab Work can be chosen. */
+function checkRangeAreas(keys, range) {
+  if (range && keys.some((k) => k !== 'bills')) {
+    return 'With a From/To date range only Bills & Lab Work can be removed. Clear the dates to remove other data.';
+  }
+  return null;
+}
+
 async function findClient(req, res) {
   const client = await Client.findByPk(req.params.clientId, { attributes: ['id', 'clientCode', 'clientName'] });
   if (!client) res.status(404).json({ message: 'Client not found' });
   return client;
 }
 
-async function countArea(area, clientId, transaction) {
+async function countArea(area, clientId, transaction, range) {
   const counts = {};
   for (const [label, sql] of Object.entries(area.counts)) {
-    const [[row]] = await sequelize.query(sql, { replacements: { c: clientId }, transaction });
+    const [[row]] = await sequelize.query(sql, { replacements: replacementsFor(clientId, range), transaction });
     counts[label] = Number(row.count);
   }
   return counts;
@@ -165,19 +251,34 @@ async function billsRemain(clientId, keys) {
   return Number(row.count) > 0;
 }
 
-// GET /api/clients/:clientId/data-summary - every area with its counts.
+// GET /api/clients/:clientId/data-summary[?fromDate=&toDate=] - every area
+// with its counts. With a range, Bills & Lab Work counts only that range and
+// the other areas come back marked rangeNotApplicable.
 async function getDataSummary(req, res) {
   const client = await findClient(req, res);
   if (!client) return undefined;
+  const { range, error } = parseRange(req.query.fromDate, req.query.toDate);
+  if (error) return res.status(400).json({ message: error });
+
   const areas = [];
   for (const a of AREAS) {
-    const counts = await countArea(a, client.id);
+    const counts = await countArea(areaFor(a.key, range), client.id, undefined, range);
     areas.push({
       key: a.key, label: a.label, description: a.description, needsBills: !!a.needsBills,
+      rangeNotApplicable: !!range && a.key !== 'bills',
       counts, total: Object.values(counts).reduce((s, n) => s + n, 0),
     });
   }
-  return res.json({ client, areas });
+  let outsideBillsOnInvoices = 0;
+  if (range) {
+    const [[row]] = await sequelize.query(OUTSIDE_BILLS_ON_INVOICES, { replacements: replacementsFor(client.id, range) });
+    outsideBillsOnInvoices = Number(row.count);
+  }
+  return res.json({
+    client, areas,
+    range: range ? { fromDate: range.fromDate, toDate: range.toDate } : null,
+    outsideBillsOnInvoices,
+  });
 }
 
 // GET /api/clients/:clientId/data-export?areas=bills,patients - a JSON
@@ -187,17 +288,25 @@ async function exportClientData(req, res) {
   if (!client) return undefined;
   const { keys, error } = parseAreas(req.query.areas);
   if (error) return res.status(400).json({ message: error });
+  const { range, error: rangeError } = parseRange(req.query.fromDate, req.query.toDate);
+  if (rangeError) return res.status(400).json({ message: rangeError });
+  const rangeAreaError = checkRangeAreas(keys, range);
+  if (rangeAreaError) return res.status(400).json({ message: rangeAreaError });
 
   const tables = {};
   for (const key of keys) {
-    for (const [table, sql] of Object.entries(AREA_BY_KEY.get(key).exports)) {
-      const [rows] = await sequelize.query(sql, { replacements: { c: client.id } });
+    for (const [table, sql] of Object.entries(areaFor(key, range).exports)) {
+      const [rows] = await sequelize.query(sql, { replacements: replacementsFor(client.id, range) });
       tables[table] = rows;
     }
   }
   const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
   res.setHeader('Content-Disposition', `attachment; filename="${client.clientCode}-data-backup-${stamp}.json"`);
-  return res.json({ client: client.toJSON(), areas: keys, exportedAt: new Date().toISOString(), tables });
+  return res.json({
+    client: client.toJSON(), areas: keys,
+    range: range ? { fromDate: range.fromDate, toDate: range.toDate } : null,
+    exportedAt: new Date().toISOString(), tables,
+  });
 }
 
 // POST /api/clients/:clientId/data-reset  Body: { areas: [...], confirmCode }
@@ -211,6 +320,10 @@ async function resetClientData(req, res) {
   if (String(req.body.confirmCode || '').trim().toUpperCase() !== client.clientCode.toUpperCase()) {
     return res.status(400).json({ message: `Type the client code ${client.clientCode} to confirm` });
   }
+  const { range, error: rangeError } = parseRange(req.body.fromDate, req.body.toDate);
+  if (rangeError) return res.status(400).json({ message: rangeError });
+  const rangeAreaError = checkRangeAreas(keys, range);
+  if (rangeAreaError) return res.status(400).json({ message: rangeAreaError });
   const blocked = keys.filter((k) => AREA_BY_KEY.get(k).needsBills);
   if (blocked.length && await billsRemain(client.id, keys)) {
     const names = blocked.map((k) => AREA_BY_KEY.get(k).label).join(', ');
@@ -220,15 +333,17 @@ async function resetClientData(req, res) {
   const deleted = {};
   await sequelize.transaction(async (transaction) => {
     // Bills first: other areas (patients, payors, doctors, parameters) are referenced by them.
-    for (const area of AREAS.filter((a) => keys.includes(a.key))) {
-      deleted[area.label] = await countArea(area, client.id, transaction);
+    for (const base of AREAS.filter((a) => keys.includes(a.key))) {
+      const area = areaFor(base.key, range);
+      deleted[area.label] = await countArea(area, client.id, transaction, range);
       for (const sql of area.deletes) {
-        await sequelize.query(sql, { replacements: { c: client.id }, transaction });
+        await sequelize.query(sql, { replacements: replacementsFor(client.id, range), transaction });
       }
     }
   });
-  console.log(`Client data reset by ${req.user?.username || 'chief admin'}: ${client.clientCode} - ${keys.join(', ')}`);
-  return res.json({ message: `Removed from ${client.clientCode}: ${areaLabels(keys)}`, deleted });
+  const period = range ? ` (${range.fromDate} to ${range.toDate})` : '';
+  console.log(`Client data reset by ${req.user?.username || 'chief admin'}: ${client.clientCode} - ${keys.join(', ')}${period}`);
+  return res.json({ message: `Removed from ${client.clientCode}${period}: ${areaLabels(keys)}`, deleted });
 }
 
 function areaLabels(keys) {

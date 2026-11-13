@@ -2,8 +2,9 @@ const { Op } = require('sequelize');
 const XLSX = require('xlsx');
 const {
   sequelize, TestGroup, TestMaster, ParameterMaster, ParameterNormalRange, BillItem, Result,
-  ClientTestPrice, ClientTestShortName, ClientTestSpecimen, PayorTestPrice, ClientParameterTrend,
+  ClientTestPrice, ClientTestShortName, ClientTestSpecimen, PayorTestPrice, ClientParameterTrend, ClientHiddenParameter,
 } = require('../models');
+const { hiddenKey, hiddenParameterKeys } = require('../utils/hiddenParameters');
 const { sortParameters } = require('../utils/parameterOrder');
 const { normalizeTestType } = require('../utils/testType');
 const { isBillableForClient } = require('../utils/testStatus');
@@ -231,6 +232,8 @@ async function listTests(req, res) {
   const specimenByTestId = clientId
     ? new Map((await ClientTestSpecimen.findAll({ where: { clientId }, attributes: ['testId', 'sampleType'] })).map((r) => [r.testId, r.sampleType]))
     : null;
+  // Universal parameters this client removed from a test for itself only.
+  const hidden = await hiddenParameterKeys(clientId);
 
   const result = tests.map((t) => {
     const json = t.toJSON();
@@ -239,7 +242,13 @@ async function listTests(req, res) {
     const assigned = (json.AssignedParameters || [])
       .filter((p) => !ownedIds.has(p.id))
       .map((p) => ({ ...p, isAssigned: true }));
-    json.ParameterMasters = sortParameters([...owned, ...assigned]);
+    const all = sortParameters([...owned, ...assigned]);
+    json.ParameterMasters = all.filter((p) => !hidden.has(hiddenKey(t.id, p.id)));
+    // Listed separately (for a Restore button), only for a client.
+    if (clientId) {
+      json.HiddenParameters = all.filter((p) => hidden.has(hiddenKey(t.id, p.id)))
+        .map((p) => ({ id: p.id, parameterName: p.parameterName, unit: p.unit }));
+    }
     if (trended) json.ParameterMasters = json.ParameterMasters.map((p) => ({ ...p, showTrend: trended.has(p.id) }));
     if (priceRowByTestId) {
       // No price row yet = follows Chief Admin's switch alone.
@@ -601,12 +610,34 @@ async function removeParameter(req, res) {
   if (found.status) return res.status(found.status).json({ message: found.message });
   const { test, parameter, owned } = found;
   const clientId = requesterClientId(req);
+  // A clinic removing a universal (Chief Admin) parameter hides it from this
+  // test for itself only - the shared master and every other clinic keep it.
+  if (clientId && parameter.clientId == null) {
+    await ClientHiddenParameter.findOrCreate({
+      where: { clientId, testId: test.id, parameterId: parameter.id },
+      defaults: { createdBy: req.user?.username },
+    });
+    console.log(`Client ${clientId} hid universal parameter ${parameter.id} (${parameter.parameterName}) on test ${test.id} - ${req.user?.username || ''}`);
+    return res.json({ message: 'Parameter removed from this test for your lab only' });
+  }
   if (clientId && parameter.clientId !== clientId) {
-    return res.status(403).json({ message: 'This is a standard parameter shared with all clients - ask Chief Admin to remove it. You can remove only parameters you added.' });
+    return res.status(403).json({ message: 'This parameter belongs to another client' });
   }
   if (owned) await parameter.update({ active: false });
   else await test.removeAssignedParameter(parameter);
   return res.json({ message: owned ? 'Parameter removed from the test' : 'Parameter unlinked from this test' });
+}
+
+// POST /api/test-config/tests/:testId/parameters/:parameterId/restore
+// Brings back a universal parameter this clinic removed from a test for itself.
+async function restoreHiddenParameter(req, res) {
+  const clientId = requesterClientId(req);
+  if (!clientId) return res.status(400).json({ message: 'Only a client can restore its own removed parameters' });
+  const removed = await ClientHiddenParameter.destroy({
+    where: { clientId, testId: req.params.testId, parameterId: req.params.parameterId },
+  });
+  if (!removed) return res.status(404).json({ message: 'That parameter is not removed for your lab' });
+  return res.json({ message: 'Parameter restored to this test' });
 }
 
 // POST /api/masters/parameters/:parameterId/ranges  - add one age/gender-specific
@@ -1164,6 +1195,6 @@ async function commitUpload(req, res) {
 }
 
 module.exports = {
-  createTest, listTests, updateTest, setClientSpecimen, testUsage, deleteTest, bulkTestAction, addParameter, assignParameter, addNormalRange, deleteNormalRange, updateNormalRange, reorderParameters, setParameterSequence, removeParameter,
+  createTest, listTests, updateTest, setClientSpecimen, testUsage, deleteTest, bulkTestAction, addParameter, assignParameter, addNormalRange, deleteNormalRange, updateNormalRange, reorderParameters, setParameterSequence, removeParameter, restoreHiddenParameter,
   downloadTemplate, previewUpload, commitUpload, listTestGroups, createTestGroup, setParameterTrend, setNormalRangeText, resetParameterRanges,
 };

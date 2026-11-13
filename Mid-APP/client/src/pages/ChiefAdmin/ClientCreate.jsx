@@ -295,14 +295,18 @@ export default function ClientCreate() {
             <label><span>Designation</span>
               <input value={u.designation} onChange={(e) => updateUserRow(i, 'designation', e.target.value)} placeholder="e.g. Lab Technician" />
             </label>
-            {namedLocations.length > 1 && (
-              <label><span>Location</span>
-                <select value={u.locationName} onChange={(e) => updateUserRow(i, 'locationName', e.target.value)}>
-                  <option value="">All locations</option>
-                  {namedLocations.map((name) => <option key={name} value={name}>{name} only</option>)}
-                </select>
-              </label>
-            )}
+            {/* Always shown so it's visible at create time; choosing one location needs 2+ named locations above. */}
+            <label><span>Location</span>
+              <select
+                value={namedLocations.length > 1 ? u.locationName : ''}
+                onChange={(e) => updateUserRow(i, 'locationName', e.target.value)}
+                disabled={namedLocations.length < 2}
+                title={namedLocations.length < 2 ? 'Add 2 or more locations above to keep this user to one location' : undefined}
+              >
+                <option value="">{namedLocations.length < 2 ? 'All locations (add 2+ locations above)' : 'All locations'}</option>
+                {namedLocations.map((name) => <option key={name} value={name}>{name} only</option>)}
+              </select>
+            </label>
             <div><span>Roles</span>
               <RoleCheckboxes value={u.roleNames} onChange={(roleNames) => updateUserRow(i, 'roleNames', roleNames)} />
             </div>

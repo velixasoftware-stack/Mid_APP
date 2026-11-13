@@ -22,7 +22,8 @@ router.post('/tests/:testId/parameters', testCtrl.addParameter);
 router.post('/tests/:testId/parameters/:parameterId/assign', testCtrl.assignParameter);
 router.put('/tests/:testId/parameter-order', testCtrl.reorderParameters);
 router.put('/tests/:testId/parameters/:parameterId/sequence', testCtrl.setParameterSequence);
-router.delete('/tests/:testId/parameters/:parameterId', testCtrl.removeParameter);
+router.delete('/tests/:testId/parameters/:parameterId', testCtrl.removeParameter); // a universal one: hidden for this client only
+router.post('/tests/:testId/parameters/:parameterId/restore', testCtrl.restoreHiddenParameter);
 router.post('/parameters/:parameterId/ranges', testCtrl.addNormalRange);
 router.delete('/parameters/:parameterId/ranges/:rangeId', testCtrl.deleteNormalRange);
 router.put('/parameters/:parameterId/ranges/:rangeId', testCtrl.updateNormalRange); // edit one age/gender row

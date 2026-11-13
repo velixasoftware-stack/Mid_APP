@@ -315,14 +315,27 @@ export default function TestParameters() {
   // Removes a parameter from the selected test (switched off, or unlinked if
   // it was shared in from another test) - results already released keep it.
   async function removeParam(p) {
+    const scope = p.clientId
+      ? ''
+      : '\n\nThis is a universal parameter: it is removed for YOUR LAB ONLY. Other labs and the master keep it, and you can restore it any time.';
     if (!window.confirm(`Remove "${p.parameterName}" from ${selectedTest.testName}?
 
-It will no longer appear on result entry. Reports already released keep their values.`)) return;
+It will no longer appear on result entry. Reports already released keep their values.${scope}`)) return;
     try {
       await api.delete(`/test-config/tests/${selectedTest.id}/parameters/${p.id}`);
       await loadAll();
     } catch (err) {
       window.alert(err.response?.data?.message || 'Could not remove the parameter');
+    }
+  }
+
+  // Brings back a universal parameter removed for this lab only.
+  async function restoreParam(p) {
+    try {
+      await api.post(`/test-config/tests/${selectedTest.id}/parameters/${p.id}/restore`);
+      await loadAll();
+    } catch (err) {
+      window.alert(err.response?.data?.message || 'Could not restore the parameter');
     }
   }
   return (
@@ -424,11 +437,13 @@ It will no longer appear on result entry. Reports already released keep their va
                           <button type="button" className="secondary icon-btn" title="Manage ranges" onClick={() => openManageRanges(p)}>
                             <Icon name="edit" size={15} />
                           </button>
-                          {p.clientId && (
-                            <button type="button" className="icon-btn remove-param-btn" title="Remove this parameter from the test" onClick={() => removeParam(p)}>
-                              ×
-                            </button>
-                          )}
+                          <button
+                            type="button" className="icon-btn remove-param-btn"
+                            title={p.clientId ? 'Remove this parameter from the test' : 'Remove from this test for your lab only (other labs keep it)'}
+                            onClick={() => removeParam(p)}
+                          >
+                            ×
+                          </button>
                         </div>
                       </td>
                     </tr>
@@ -436,6 +451,27 @@ It will no longer appear on result entry. Reports already released keep their va
                   {(selectedTest.ParameterMasters || []).length === 0 && <tr><td colSpan={8}>No parameters yet for this test.</td></tr>}
                 </tbody>
               </table>
+              {(selectedTest.HiddenParameters || []).length > 0 && (
+                <div style={{ marginTop: 14 }}>
+                  <h4 style={{ margin: '0 0 4px' }}>Removed for your lab</h4>
+                  <p style={{ fontSize: 12, color: '#64748b', margin: '0 0 6px' }}>
+                    Universal parameters you removed from this test. Only your lab is affected - other labs still have them.
+                  </p>
+                  <table>
+                    <tbody>
+                      {selectedTest.HiddenParameters.map((p) => (
+                        <tr key={p.id}>
+                          <td>{p.parameterName}</td>
+                          <td>{p.unit || '—'}</td>
+                          <td style={{ textAlign: 'right' }}>
+                            <button type="button" className="secondary" onClick={() => restoreParam(p)}>Restore</button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </>
           )}
         </div>

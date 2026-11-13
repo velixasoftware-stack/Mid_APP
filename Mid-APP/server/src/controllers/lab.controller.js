@@ -12,6 +12,7 @@ const { sortParameters, sortResultsByParameter } = require('../utils/parameterOr
 const { getCurrentActor } = require('../utils/auditContext');
 const { fastingPostLunchConflict } = require('../utils/testType');
 const { applyClientRanges } = require('../utils/clientRanges');
+const { hiddenKey, hiddenParameterKeys } = require('../utils/hiddenParameters');
 
 // A client doing result entry sees every universal parameter plus whatever
 // parameters it added for itself for that test - never another client's own.
@@ -60,7 +61,9 @@ async function attachNormalRanges(parameterMasters, clientId) {
  * callers (result entry UI, isOutOfRange) never need their own age/gender
  * matching logic - they just read normalRangeLow/High as before.
  */
-async function withResolvedRanges(sampleJson) {
+// hidden: this client's removed universal parameters (hiddenParameterKeys) -
+// pass it in when resolving many samples so it's fetched only once.
+async function withResolvedRanges(sampleJson, hidden) {
   const patient = sampleJson.BillItem?.Bill?.Patient;
   const age = patient?.age;
   const gender = patient?.gender;
@@ -71,7 +74,12 @@ async function withResolvedRanges(sampleJson) {
     const owned = testMaster.ParameterMasters || [];
     const ownedIds = new Set(owned.map((p) => p.id));
     const assigned = (testMaster.AssignedParameters || []).filter((p) => !ownedIds.has(p.id));
-    testMaster.ParameterMasters = sortParameters([...owned, ...assigned]);
+    // A parameter this clinic removed from the test is left out - unless this
+    // sample already has a result for it, so nothing entered disappears.
+    const hiddenKeys = hidden || await hiddenParameterKeys(sampleJson.clientId);
+    const withResult = new Set((sampleJson.Results || []).map((r) => r.parameterId));
+    testMaster.ParameterMasters = sortParameters([...owned, ...assigned])
+      .filter((p) => withResult.has(p.id) || !hiddenKeys.has(hiddenKey(testMaster.id, p.id)));
     delete testMaster.AssignedParameters;
   }
 
@@ -97,7 +105,8 @@ async function listSamples(req, res) {
   if (status) where.status = status;
 
   const samples = await Sample.findAll({ where, include: buildSampleIncludes(clientId), order: [['createdAt', 'DESC']] });
-  const withRanges = await Promise.all(samples.map((s) => withResolvedRanges(s.toJSON())));
+  const hidden = await hiddenParameterKeys(clientId);
+  const withRanges = await Promise.all(samples.map((s) => withResolvedRanges(s.toJSON(), hidden)));
   // canRevoke: released and still inside the revoke window - the lab screen
   // offers Revoke only for these (the server re-checks on revoke anyway).
   for (const s of withRanges) s.canRevoke = !revokeBlockReason(s);

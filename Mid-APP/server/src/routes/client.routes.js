@@ -43,6 +43,8 @@ router.put('/:id', requireAdminRole, clientCtrl.updateClient);
 router.post('/:id/impersonate', requireChiefAdminRole(CHIEF_ADMIN_ROLES.ADMIN, CHIEF_ADMIN_ROLES.MARKETING), assignedClientOnly, clientCtrl.impersonateClient);
 
 router.get('/:clientId/subscriptions', assignedClientOnly, subCtrl.listSubscriptions);
+// Correct one cycle's dates (backdating allowed) and amount - ADMIN only, money-touching.
+router.put('/:clientId/subscriptions/:subscriptionId', requireAdminRole, subCtrl.updateSubscription);
 router.get('/:clientId/subscriptions/current', assignedClientOnly, subCtrl.getCurrentSubscription);
 // A client that paid Chief Admin directly (outside the app) - ADMIN only, money-touching like role-screens below.
 router.post('/:clientId/manual-payment', requireChiefAdminRole(CHIEF_ADMIN_ROLES.ADMIN), paymentCtrl.recordManualPayment);

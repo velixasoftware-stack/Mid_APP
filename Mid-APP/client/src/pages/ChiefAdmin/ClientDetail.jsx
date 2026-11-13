@@ -20,6 +20,12 @@ export default function ClientDetail() {
   const [form, setForm] = useState(null);
   const [users, setUsers] = useState([]);
   const [subscriptions, setSubscriptions] = useState([]);
+  // ADMIN: inline edit of one subscription cycle's dates / amount.
+  const [editingSubId, setEditingSubId] = useState(null);
+  const [subForm, setSubForm] = useState({ fromDate: '', toDate: '', dueDate: '', amount: '' });
+  const [subSaving, setSubSaving] = useState(false);
+  const [subMessage, setSubMessage] = useState('');
+  const [subError, setSubError] = useState('');
   const [tests, setTests] = useState([]);
   const [prices, setPrices] = useState([]);
   const [marketingPersons, setMarketingPersons] = useState([]);
@@ -85,7 +91,7 @@ export default function ClientDetail() {
       address: clientRes.data.address || '',
       salesPerson: clientRes.data.salesPerson || '',
       marketingPersonPrice: String(clientRes.data.marketingPersonPrice ?? 0),
-      monthlyAmount: clientRes.data.monthlyAmount,
+      monthlyAmount: String(Number(clientRes.data.monthlyAmount)),
       active: clientRes.data.active,
       allowBillCancellationRefund: clientRes.data.allowBillCancellationRefund,
       qrPaymentRequired: clientRes.data.qrPaymentRequired,
@@ -103,13 +109,47 @@ export default function ClientDetail() {
     e.preventDefault();
     setError('');
     setSaveMessage('');
+    const oldAmount = Number(client.monthlyAmount);
+    const newAmount = Number(form.monthlyAmount);
+    if (newAmount !== oldAmount && !window.confirm(`Change ${client.clientCode}'s monthly amount from ₹${oldAmount} to ₹${newAmount}?\n\nIt applies from the next subscription cycle.`)) return;
     try {
-      const { monthlyAmount, ...editable } = form;
-      await api.put(`/clients/${id}`, editable);
-      setSaveMessage('Client details updated.');
+      await api.put(`/clients/${id}`, { ...form, monthlyAmount: newAmount });
+      setSaveMessage(newAmount !== oldAmount ? `Client details updated. Monthly amount is now ₹${newAmount}.` : 'Client details updated.');
       load();
     } catch (err) {
       setError(err.response?.data?.message || 'Failed to update client');
+    }
+  }
+
+  function startEditSubscription(s) {
+    setSubMessage('');
+    setSubError('');
+    setEditingSubId(s.id);
+    setSubForm({ fromDate: s.fromDate, toDate: s.toDate, dueDate: s.dueDate, amount: String(Number(s.amount)) });
+  }
+
+  async function handleSaveSubscription(s) {
+    if (subForm.fromDate > subForm.toDate) { setSubError('Start Date cannot be after End Date'); return; }
+    const changes = [];
+    if (subForm.fromDate !== s.fromDate) changes.push(`From ${s.fromDate} → ${subForm.fromDate}`);
+    if (subForm.toDate !== s.toDate) changes.push(`To ${s.toDate} → ${subForm.toDate}`);
+    if (subForm.dueDate !== s.dueDate) changes.push(`Due ${s.dueDate} → ${subForm.dueDate}`);
+    if (Number(subForm.amount) !== Number(s.amount)) changes.push(`Amount ₹${s.amount} → ₹${subForm.amount}`);
+    if (changes.length === 0) { setEditingSubId(null); return; }
+    if (!window.confirm(`Update the ${s.month} cycle (${s.status}) for ${client.clientCode}?\n\n${changes.join('\n')}`)) return;
+
+    setSubSaving(true);
+    setSubError('');
+    setSubMessage('');
+    try {
+      const { data } = await api.put(`/clients/${id}/subscriptions/${s.id}`, subForm);
+      setEditingSubId(null);
+      setSubMessage(`Cycle updated. Status: ${data.paymentStatus}. Paid through: ${data.paidThrough || '—'}.`);
+      load();
+    } catch (err) {
+      setSubError(err.response?.data?.message || 'Failed to update the subscription cycle');
+    } finally {
+      setSubSaving(false);
     }
   }
 
@@ -324,6 +364,7 @@ export default function ClientDetail() {
   }
 
   const billableUsers = users.filter((u) => !u.isSystemUser);
+  const planAmount = calculatePlanAmount(billableUsers.length) + (Number(form?.marketingPersonPrice) || 0);
   const activeLocations = locations.filter((l) => l.active);
   // Location access only matters once the client has more than one location.
   const multiLocation = activeLocations.length > 1;
@@ -368,14 +409,33 @@ export default function ClientDetail() {
             />
           </div>
           <label><span>Marketing Person Price (₹/month)</span>
-            <input type="number" min={0} value={form.marketingPersonPrice} onChange={(e) => setForm((f) => ({ ...f, marketingPersonPrice: e.target.value }))} />
-          </label>
-          <label><span>Monthly Amount</span>
             <input
-              value={`₹${calculatePlanAmount(billableUsers.length) + (Number(form.marketingPersonPrice) || 0)} (${billableUsers.length} user${billableUsers.length === 1 ? '' : 's'} + ₹${Number(form.marketingPersonPrice) || 0} marketing)`}
-              disabled
+              type="number" min={0} value={form.marketingPersonPrice}
+              // A new marketing price re-derives the plan amount, like before.
+              onChange={(e) => {
+                const marketingPersonPrice = e.target.value;
+                setForm((f) => ({ ...f, marketingPersonPrice, monthlyAmount: String(calculatePlanAmount(billableUsers.length) + (Number(marketingPersonPrice) || 0)) }));
+              }}
             />
           </label>
+          <div>
+            <span style={{ display: 'block', marginBottom: 6, fontWeight: 600, fontSize: 13 }}>Monthly Amount (₹)</span>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <input
+                type="number" min={0} step="0.01" required
+                value={form.monthlyAmount}
+                onChange={(e) => setForm((f) => ({ ...f, monthlyAmount: e.target.value }))}
+              />
+              {Number(form.monthlyAmount) !== planAmount && (
+                <button type="button" className="secondary" onClick={() => setForm((f) => ({ ...f, monthlyAmount: String(planAmount) }))} title={`${billableUsers.length} user(s) + ₹${Number(form.marketingPersonPrice) || 0} marketing`}>
+                  Use plan ₹{planAmount}
+                </button>
+              )}
+            </div>
+            <span className="cell-sub" style={{ fontSize: 12 }}>
+              Plan: ₹{planAmount} ({billableUsers.length} user{billableUsers.length === 1 ? '' : 's'} + ₹{Number(form.marketingPersonPrice) || 0} marketing). Applies from the next cycle; edit a current cycle&apos;s amount in Subscription History.
+            </span>
+          </div>
           <label><span>Active</span>
             <select value={form.active ? 'yes' : 'no'} onChange={(e) => setForm((f) => ({ ...f, active: e.target.value === 'yes' }))}>
               <option value="yes">Active</option>
@@ -410,18 +470,42 @@ export default function ClientDetail() {
 
       <div className="card">
         <h3>Subscription History</h3>
+        {isAdmin && (
+          <p style={{ fontSize: 13, color: '#64748b' }}>
+            Use Edit to correct a cycle&apos;s dates (past dates allowed) or amount. The End Date of the latest PAID
+            cycle is the client&apos;s &quot;Paid through&quot; date.
+          </p>
+        )}
         <table>
-          <thead><tr><th>Month</th><th>From</th><th>To</th><th>Due</th><th>Amount</th><th>Status</th></tr></thead>
+          <thead><tr><th>Month</th><th>From</th><th>To</th><th>Due</th><th>Amount</th><th>Status</th>{isAdmin && <th />}</tr></thead>
           <tbody>
-            {subscriptions.map((s) => (
+            {subscriptions.map((s) => (editingSubId === s.id ? (
+              <tr key={s.id}>
+                <td>{(subForm.fromDate || s.fromDate).slice(0, 7)}</td>
+                <td><input type="date" value={subForm.fromDate} onChange={(e) => setSubForm((f) => ({ ...f, fromDate: e.target.value }))} required /></td>
+                <td><input type="date" value={subForm.toDate} min={subForm.fromDate || undefined} onChange={(e) => setSubForm((f) => ({ ...f, toDate: e.target.value }))} required /></td>
+                <td><input type="date" value={subForm.dueDate} onChange={(e) => setSubForm((f) => ({ ...f, dueDate: e.target.value }))} required /></td>
+                <td><input type="number" min="0" step="0.01" style={{ width: 110 }} value={subForm.amount} onChange={(e) => setSubForm((f) => ({ ...f, amount: e.target.value }))} required /></td>
+                <td><span className={`badge ${s.status}`}>{s.status}</span></td>
+                <td style={{ whiteSpace: 'nowrap' }}>
+                  <button type="button" onClick={() => handleSaveSubscription(s)} disabled={subSaving}>{subSaving ? 'Saving…' : 'Save'}</button>{' '}
+                  <button type="button" className="secondary" onClick={() => setEditingSubId(null)} disabled={subSaving}>Cancel</button>
+                </td>
+              </tr>
+            ) : (
               <tr key={s.id}>
                 <td>{s.month}</td><td>{s.fromDate}</td><td>{s.toDate}</td><td>{s.dueDate}</td>
                 <td>₹{s.amount}</td><td><span className={`badge ${s.status}`}>{s.status}</span></td>
+                {isAdmin && (
+                  <td><button type="button" className="secondary" onClick={() => startEditSubscription(s)} disabled={subSaving}>Edit</button></td>
+                )}
               </tr>
-            ))}
-            {subscriptions.length === 0 && <tr><td colSpan={6}>No subscription cycles yet.</td></tr>}
+            )))}
+            {subscriptions.length === 0 && <tr><td colSpan={isAdmin ? 7 : 6}>No subscription cycles yet.</td></tr>}
           </tbody>
         </table>
+        {subMessage && <p style={{ color: '#166534' }}>{subMessage}</p>}
+        {subError && <p className="error-text">{subError}</p>}
 
         {isAdmin && (<>
         <h4 style={{ marginTop: 18 }}>Record a Direct Payment</h4>

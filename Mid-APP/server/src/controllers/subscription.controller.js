@@ -216,7 +216,54 @@ async function grantFreeDays(req, res) {
   return res.status(201).json(cycle);
 }
 
+const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+// PUT /api/clients/:clientId/subscriptions/:subscriptionId
+// Body: { fromDate?, toDate?, dueDate?, amount? }  (dates 'YYYY-MM-DD')
+// Chief Admin (ADMIN) correction of one cycle: its Start/End/Due dates - past
+// dates allowed, e.g. to backdate when a client really paid from - and its
+// amount. Changing the End Date of the latest PAID cycle is how the client's
+// "Paid through" date is changed. Access is re-checked right after.
+async function updateSubscription(req, res) {
+  const sub = await ClientSubscription.findOne({
+    where: { id: req.params.subscriptionId, clientId: req.params.clientId },
+  });
+  if (!sub) return res.status(404).json({ message: 'Subscription cycle not found' });
+
+  const next = { fromDate: sub.fromDate, toDate: sub.toDate, dueDate: sub.dueDate, amount: sub.amount };
+  for (const field of ['fromDate', 'toDate', 'dueDate']) {
+    const v = req.body[field];
+    if (v === undefined || v === null || v === '') continue;
+    if (!DATE_ONLY_RE.test(String(v)) || Number.isNaN(new Date(`${v}T00:00:00`).getTime())) {
+      return res.status(400).json({ message: `${field} must be a date (YYYY-MM-DD)` });
+    }
+    next[field] = String(v);
+  }
+  if (req.body.amount !== undefined && req.body.amount !== null && req.body.amount !== '') {
+    const amount = Number(req.body.amount);
+    if (!Number.isFinite(amount) || amount < 0) {
+      return res.status(400).json({ message: 'amount must be 0 or more' });
+    }
+    next.amount = amount.toFixed(2);
+  }
+  if (next.fromDate > next.toDate) {
+    return res.status(400).json({ message: 'Start Date cannot be after End Date' });
+  }
+
+  const before = { fromDate: sub.fromDate, toDate: sub.toDate, dueDate: sub.dueDate, amount: sub.amount };
+  await sub.update({ ...next, month: next.fromDate.slice(0, 7), updatedBy: req.user?.username || 'chief admin' });
+  const paymentStatus = await syncClientPaymentStatus(sub.clientId);
+  console.log(`Subscription ${sub.id} of client ${sub.clientId} edited by ${req.user?.username || 'chief admin'}: ${JSON.stringify(before)} -> ${JSON.stringify(next)}`);
+
+  return res.json({
+    subscription: sub,
+    paymentStatus,
+    paidThrough: await getPaidThroughDate(sub.clientId),
+  });
+}
+
 module.exports = {
+  updateSubscription,
   listSubscriptions,
   getCurrentSubscription,
   getOrCreateCurrentSubscription,

@@ -431,6 +431,18 @@ const ClientParameterTrend = sequelize.define('ClientParameterTrend', {
   indexes: [{ unique: true, fields: ['clientId', 'parameterId'] }],
 });
 
+// A universal (Chief Admin) parameter a clinic has removed from one test for
+// itself only: hidden from that clinic's Test Parameters list and result
+// entry for that test, while every other clinic (and Chief Admin's master)
+// still has it. Results already entered keep printing. No row = shown.
+const ClientHiddenParameter = sequelize.define('ClientHiddenParameter', {
+  id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
+  ...AUDIT_FIELDS,
+}, {
+  tableName: 'client_hidden_parameter',
+  indexes: [{ unique: true, fields: ['clientId', 'testId', 'parameterId'] }],
+});
+
 const ClientTestPrice = sequelize.define('ClientTestPrice', {
   id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
   price: { type: DataTypes.DECIMAL(10, 2), allowNull: false },
@@ -806,6 +818,13 @@ ClientParameterTrend.belongsTo(Client, { foreignKey: 'clientId' });
 ParameterMaster.hasMany(ClientParameterTrend, { foreignKey: { name: 'parameterId', allowNull: false }, onDelete: 'CASCADE' });
 ClientParameterTrend.belongsTo(ParameterMaster, { foreignKey: 'parameterId' });
 
+Client.hasMany(ClientHiddenParameter, { foreignKey: { name: 'clientId', allowNull: false }, onDelete: 'CASCADE' });
+ClientHiddenParameter.belongsTo(Client, { foreignKey: 'clientId' });
+TestMaster.hasMany(ClientHiddenParameter, { foreignKey: { name: 'testId', allowNull: false }, onDelete: 'CASCADE' });
+ClientHiddenParameter.belongsTo(TestMaster, { foreignKey: 'testId' });
+ParameterMaster.hasMany(ClientHiddenParameter, { foreignKey: { name: 'parameterId', allowNull: false }, onDelete: 'CASCADE' });
+ClientHiddenParameter.belongsTo(ParameterMaster, { foreignKey: 'parameterId' });
+
 Client.hasMany(ClientTestShortName, { foreignKey: 'clientId', onDelete: 'CASCADE' });
 ClientTestShortName.belongsTo(Client, { foreignKey: 'clientId' });
 
@@ -994,6 +1013,7 @@ module.exports = {
   ClientTestShortName,
   ClientTestSpecimen,
   ClientParameterTrend,
+  ClientHiddenParameter,
   ClientTestPrice,
   Package,
   Patient,

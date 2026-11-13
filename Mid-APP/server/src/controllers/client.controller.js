@@ -503,18 +503,19 @@ async function getClientRevenue(req, res) {
   });
 }
 
-// PUT /api/clients/:id
-// monthlyAmount itself is intentionally not directly editable here - it's
-// always derived from the plan (see calculatePlanAmount) plus
-// marketingPersonPrice, recomputed here whenever marketingPersonPrice changes
-// so a later adjustment still bills correctly from the next cycle.
+// PUT /api/clients/:id  (ADMIN only - see client.routes.js)
+// monthlyAmount defaults to the plan (see calculatePlanAmount) plus
+// marketingPersonPrice, recomputed here whenever marketingPersonPrice changes.
+// An explicit monthlyAmount in the body (a custom negotiated rate, same as at
+// client creation) wins over that. Either way it applies from the next cycle;
+// already-created cycles keep their own amount (edit those per cycle).
 async function updateClient(req, res) {
   const client = await Client.findByPk(req.params.id);
   if (!client) return res.status(404).json({ message: 'Client not found' });
 
   const {
     clientName, mobile, email, address, salesPerson, marketingPersonPrice, active, allowBillCancellationRefund,
-    qrPaymentRequired,
+    qrPaymentRequired, monthlyAmount: monthlyAmountOverride,
   } = req.body;
 
   let monthlyAmount = client.monthlyAmount;
@@ -524,6 +525,15 @@ async function updateClient(req, res) {
     if (marketingFee < 0) return res.status(400).json({ message: 'marketingPersonPrice cannot be negative' });
     const userCount = await ClientUser.count({ where: { clientId: client.id, isSystemUser: false } });
     monthlyAmount = calculatePlanAmount(userCount) + marketingFee;
+  }
+  if (monthlyAmountOverride != null && monthlyAmountOverride !== '') {
+    monthlyAmount = Number(monthlyAmountOverride);
+    if (!Number.isFinite(monthlyAmount) || monthlyAmount < 0) {
+      return res.status(400).json({ message: 'monthlyAmount must be a non-negative number' });
+    }
+  }
+  if (Number(monthlyAmount) !== Number(client.monthlyAmount)) {
+    console.log(`Client ${client.clientCode} monthly amount changed by ${req.user?.username || 'chief admin'}: ${client.monthlyAmount} -> ${monthlyAmount}`);
   }
 
   await client.update({

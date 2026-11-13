@@ -19,16 +19,20 @@ export default function ClientDataReset() {
   const [busy, setBusy] = useState(''); // 'load' | 'backup' | 'reset'
   const [error, setError] = useState('');
   const [result, setResult] = useState(null);
+  // Optional From/To date range (inclusive). appliedRange = the range the
+  // counts on screen were loaded for, and the one a backup/reset uses.
+  const [range, setRange] = useState({ fromDate: '', toDate: '' });
+  const [appliedRange, setAppliedRange] = useState(null);
 
   useEffect(() => {
     api.get('/clients').then((r) => setClients(r.data.clients || [])).catch(() => setError('Failed to load clients'));
   }, []);
 
-  async function loadSummary(id) {
+  async function loadSummary(id, withRange = appliedRange) {
     setBusy('load');
     setError('');
     try {
-      const { data } = await api.get(`/clients/${id}/data-summary`);
+      const { data } = await api.get(`/clients/${id}/data-summary`, { params: withRange || {} });
       setSummary(data);
     } catch (err) {
       setError(err.response?.data?.message || 'Failed to load this client\'s data');
@@ -47,6 +51,26 @@ export default function ClientDataReset() {
     if (id) loadSummary(id);
   }
 
+  function applyRange() {
+    if (!range.fromDate || !range.toDate) { setError('Select both From Date and To Date'); return; }
+    if (range.fromDate > range.toDate) { setError('From Date cannot be after To Date'); return; }
+    const next = { ...range };
+    setAppliedRange(next);
+    setSelected(new Set());
+    setConfirmCode('');
+    setResult(null);
+    loadSummary(clientId, next);
+  }
+  function clearRange() {
+    setRange({ fromDate: '', toDate: '' });
+    setAppliedRange(null);
+    setSelected(new Set());
+    setConfirmCode('');
+    setResult(null);
+    loadSummary(clientId, null);
+  }
+  const rangeLabel = appliedRange ? `${appliedRange.fromDate} to ${appliedRange.toDate}` : '';
+
   const areas = summary?.areas || [];
   const billsArea = areas.find((a) => a.key === 'bills');
   const hasBills = (billsArea?.total || 0) > 0;
@@ -54,6 +78,7 @@ export default function ClientDataReset() {
 
   // An area that needs Bills can only go together with Bills while bills exist.
   function toggle(area) {
+    if (area.rangeNotApplicable) return;
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(area.key)) {
@@ -68,7 +93,7 @@ export default function ClientDataReset() {
     setResult(null);
   }
   function selectAll(on) {
-    setSelected(on ? new Set(areas.filter((a) => a.total > 0).map((a) => a.key)) : new Set());
+    setSelected(on ? new Set(areas.filter((a) => a.total > 0 && !a.rangeNotApplicable).map((a) => a.key)) : new Set());
     setResult(null);
   }
 
@@ -81,7 +106,8 @@ export default function ClientDataReset() {
     setError('');
     try {
       const stamp = new Date().toISOString().slice(0, 10);
-      await downloadFile(`/clients/${clientId}/data-export?areas=${[...selected].join(',')}`, `${client.clientCode}-data-backup-${stamp}.json`);
+      const rangeQs = appliedRange ? `&fromDate=${appliedRange.fromDate}&toDate=${appliedRange.toDate}` : '';
+      await downloadFile(`/clients/${clientId}/data-export?areas=${[...selected].join(',')}${rangeQs}`, `${client.clientCode}-data-backup-${stamp}.json`);
     } catch {
       setError('Failed to download the backup');
     } finally {
@@ -92,11 +118,12 @@ export default function ClientDataReset() {
   async function handleReset() {
     if (!codeOk || chosen.length === 0) return;
     const list = chosen.map((a) => `• ${a.label} (${a.total})`).join('\n');
-    if (!window.confirm(`Permanently delete this data for ${client.clientCode} - ${client.clientName}?\n\n${list}\n\nThis cannot be undone.`)) return;
+    const period = appliedRange ? `\nOnly bills dated ${rangeLabel} (both days included).\n` : '';
+    if (!window.confirm(`Permanently delete this data for ${client.clientCode} - ${client.clientName}?\n${period}\n${list}\n\nThis cannot be undone.`)) return;
     setBusy('reset');
     setError('');
     try {
-      const { data } = await api.post(`/clients/${clientId}/data-reset`, { areas: [...selected], confirmCode });
+      const { data } = await api.post(`/clients/${clientId}/data-reset`, { areas: [...selected], confirmCode, ...(appliedRange || {}) });
       setResult(data);
       setSelected(new Set());
       setConfirmCode('');
@@ -134,22 +161,43 @@ export default function ClientDataReset() {
           {summary && (
             <>
               <div className="reset-head">
-                <strong>{client.clientCode} — {client.clientName}</strong>
+                <strong>{client.clientCode} — {client.clientName}{appliedRange && <span className="cell-sub"> · bills dated {rangeLabel}</span>}</strong>
                 <div style={{ display: 'flex', gap: 6 }}>
                   <button type="button" className="secondary" onClick={() => selectAll(true)}>Select all with data</button>
                   <button type="button" className="secondary" onClick={() => selectAll(false)}>Clear</button>
                 </div>
               </div>
+              <div className="form-grid" style={{ alignItems: 'end', margin: '10px 0' }}>
+                <label><span>From Date</span>
+                  <input type="date" value={range.fromDate} max={range.toDate || undefined} onChange={(e) => setRange((r) => ({ ...r, fromDate: e.target.value }))} />
+                </label>
+                <label><span>To Date</span>
+                  <input type="date" value={range.toDate} min={range.fromDate || undefined} onChange={(e) => setRange((r) => ({ ...r, toDate: e.target.value }))} />
+                </label>
+                <button type="button" onClick={applyRange} disabled={!!busy || !range.fromDate || !range.toDate}>Apply Date Range</button>
+                {appliedRange && <button type="button" className="secondary" onClick={clearRange} disabled={!!busy}>Show all dates</button>}
+              </div>
+              <p className="cell-sub" style={{ margin: '0 0 10px' }}>
+                {appliedRange
+                  ? 'Date range on: only Bills & Lab Work created in this range (with their tests, samples, results and reports) will be removed. Other data is not dated, so it is left alone.'
+                  : 'Optional: pick a From Date and To Date to remove only the bills & lab work of that period. Without dates, everything selected below is removed.'}
+              </p>
+              {appliedRange && summary.outsideBillsOnInvoices > 0 && (
+                <p className="reset-note">
+                  Note: {summary.outsideBillsOnInvoices} bill(s) outside this range are on the same payor invoice(s). Those invoices are removed; those bills stay but show as not invoiced.
+                </p>
+              )}
               <table className="reset-table">
                 <thead><tr><th style={{ width: 36 }} /><th>Data</th><th>What&apos;s there now</th></tr></thead>
                 <tbody>
                   {areas.map((a) => (
-                    <tr key={a.key} className={selected.has(a.key) ? 'selected' : ''} onClick={() => toggle(a)}>
-                      <td><input type="checkbox" checked={selected.has(a.key)} onChange={() => toggle(a)} onClick={(e) => e.stopPropagation()} /></td>
+                    <tr key={a.key} className={selected.has(a.key) ? 'selected' : ''} onClick={() => toggle(a)} style={a.rangeNotApplicable ? { opacity: 0.45, cursor: 'not-allowed' } : undefined}>
+                      <td><input type="checkbox" checked={selected.has(a.key)} disabled={a.rangeNotApplicable} onChange={() => toggle(a)} onClick={(e) => e.stopPropagation()} /></td>
                       <td>
                         <div className="reset-area">{a.label}</div>
                         <div className="cell-sub">{a.description}</div>
-                        {a.needsBills && hasBills && <div className="reset-note">Removed together with Bills &amp; Lab Work</div>}
+                        {a.rangeNotApplicable && <div className="reset-note">Not available with a date range</div>}
+                        {!a.rangeNotApplicable && a.needsBills && hasBills && <div className="reset-note">Removed together with Bills &amp; Lab Work</div>}
                       </td>
                       <td>
                         <div className="reset-counts">
